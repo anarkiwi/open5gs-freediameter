@@ -92,10 +92,14 @@ static int determine_sctp_sockopt_event_subscribe_size(void)
     if (sd < 0)
         return sd;
 
+    memset(buf, 0, sizeof(buf));
     rc = getsockopt(sd, IPPROTO_SCTP, SCTP_EVENTS, buf, &buf_len);
     close(sd);
-    if (rc < 0)
+    if (rc < 0) {
+        LOG_E("getsockopt(SCTP_PEER_ADDR_PARAMS) failed [%d:%s]",
+                rc, strerror(errno));
         return rc;
+    }
 
     sctp_sockopt_event_subscribe_size = buf_len;
 
@@ -125,10 +129,10 @@ static int determine_sctp_sockopt_event_subscribe_size(void)
  * of the structure at kernel compile time. In an ideal world, it would just
  * use the known first bytes and assume the remainder is all zero.
  * But as it doesn't do that, let's try to work around this */
-static int sctp_setsockopt_events_linux_workaround(
-        int fd, const struct sctp_event_subscribe *event)
+static int sctp_setsockopt_event_subscribe_workaround(
+        int fd, const struct sctp_event_subscribe *event_subscribe)
 {
-    const unsigned int compiletime_size = sizeof(*event);
+    const unsigned int compiletime_size = sizeof(*event_subscribe);
     int rc;
 
     if (determine_sctp_sockopt_event_subscribe_size() < 0) {
@@ -139,15 +143,15 @@ static int sctp_setsockopt_events_linux_workaround(
     if (compiletime_size == sctp_sockopt_event_subscribe_size) {
         /* no kernel workaround needed */
         return setsockopt(fd, IPPROTO_SCTP, SCTP_EVENTS,
-                event, compiletime_size);
+                event_subscribe, compiletime_size);
     } else if (compiletime_size < sctp_sockopt_event_subscribe_size) {
         /* we are using an older userspace with a more modern kernel
          * and hence need to pad the data */
         uint8_t buf[256];
         ASSERT(sctp_sockopt_event_subscribe_size <= sizeof(buf));
 
-        memcpy(buf, event, compiletime_size);
-        memset(buf + sizeof(*event),
+        memcpy(buf, event_subscribe, compiletime_size);
+        memset(buf + sizeof(*event_subscribe),
                 0, sctp_sockopt_event_subscribe_size - compiletime_size);
         return setsockopt(fd, IPPROTO_SCTP, SCTP_EVENTS,
                 buf, sctp_sockopt_event_subscribe_size);
@@ -155,7 +159,7 @@ static int sctp_setsockopt_events_linux_workaround(
         /* we are using a newer userspace with an older kernel and hence
          * need to truncate the data - but only if the caller didn't try
          * to enable any of the events of the truncated portion */
-        rc = byte_nonzero((const uint8_t *)event,
+        rc = byte_nonzero((const uint8_t *)event_subscribe,
                 sctp_sockopt_event_subscribe_size, compiletime_size);
         if (rc >= 0) {
             LOG_E("Kernel only supports sctp_event_subscribe of %u bytes, "
@@ -164,8 +168,86 @@ static int sctp_setsockopt_events_linux_workaround(
             return -1;
         }
 
-        return setsockopt(fd, IPPROTO_SCTP, SCTP_EVENTS, event,
+        return setsockopt(fd, IPPROTO_SCTP, SCTP_EVENTS, event_subscribe,
                 sctp_sockopt_event_subscribe_size);
+    }
+}
+
+static int sctp_sockopt_paddrparams_size = 0;
+
+static int determine_sctp_sockopt_paddrparams_size(void)
+{
+    uint8_t buf[256];
+    socklen_t buf_len = sizeof(buf);
+    int sd, rc;
+
+    /* only do this once */
+    if (sctp_sockopt_paddrparams_size != 0)
+        return 0;
+
+    sd = socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);
+    if (sd < 0)
+        return sd;
+
+    memset(buf, 0, sizeof(buf));
+    rc = getsockopt(sd, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS, buf, &buf_len);
+    close(sd);
+    if (rc < 0) {
+        LOG_E("getsockopt(SCTP_PEER_ADDR_PARAMS) failed [%d:%s]",
+                rc, strerror(errno));
+        return rc;
+    }
+
+    sctp_sockopt_paddrparams_size = buf_len;
+
+    LOG_D("sizes of 'struct sctp_event_subscribe': "
+            "compile-time %zu, kernel: %u",
+            sizeof(struct sctp_event_subscribe),
+            sctp_sockopt_event_subscribe_size);
+    return 0;
+}
+
+static int sctp_setsockopt_paddrparams_workaround(
+        int fd, const struct sctp_paddrparams *paddrparams)
+{
+    const unsigned int compiletime_size = sizeof(*paddrparams);
+    int rc;
+
+    if (determine_sctp_sockopt_paddrparams_size() < 0) {
+        LOG_E("Cannot determine SCTP_EVENTS socket option size");
+        return -1;
+    }
+
+    if (compiletime_size == sctp_sockopt_paddrparams_size) {
+        /* no kernel workaround needed */
+        return setsockopt(fd, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS,
+                paddrparams, compiletime_size);
+    } else if (compiletime_size < sctp_sockopt_paddrparams_size) {
+        /* we are using an older userspace with a more modern kernel
+         * and hence need to pad the data */
+        uint8_t buf[256];
+        ASSERT(sctp_sockopt_paddrparams_size <= sizeof(buf));
+
+        memcpy(buf, paddrparams, compiletime_size);
+        memset(buf + sizeof(*paddrparams),
+                0, sctp_sockopt_paddrparams_size - compiletime_size);
+        return setsockopt(fd, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS,
+                buf, sctp_sockopt_paddrparams_size);
+    } else /* if (compiletime_size > sctp_sockopt_paddrparams_size) */ {
+        /* we are using a newer userspace with an older kernel and hence
+         * need to truncate the data - but only if the caller didn't try
+         * to enable any of the events of the truncated portion */
+        rc = byte_nonzero((const uint8_t *)paddrparams,
+                sctp_sockopt_paddrparams_size, compiletime_size);
+        if (rc >= 0) {
+            LOG_E("Kernel only supports sctp_event_subscribe of %u bytes, "
+                "but caller tried to enable more modern event at offset %u",
+                sctp_sockopt_paddrparams_size, rc);
+            return -1;
+        }
+
+        return setsockopt(fd, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS, paddrparams,
+                sctp_sockopt_paddrparams_size);
     }
 }
 #endif
@@ -455,7 +537,11 @@ static int fd_setsockopt_prebind(int sk)
 #endif /* ADJUST_RTX_PARAMS */
 
 		/* Set the option to the socket */
+#if 0 /* Open5GS : workaround for SCTP event */
 		CHECK_SYS(  setsockopt(sk, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS, &parms, sizeof(parms)) );
+#else
+        CHECK_SYS(  sctp_setsockopt_paddrparams_workaround(sk, &parms) );
+#endif
 		
 		if (TRACE_BOOL(ANNOYING)) {
 			/* Check new values */
@@ -497,7 +583,7 @@ static int fd_setsockopt_prebind(int sk)
 #if 0 /* Open5GS : workaround for SCTP event */
 		CHECK_SYS(  setsockopt(sk, IPPROTO_SCTP, SCTP_EVENTS, &event, sizeof(event)) );
 #else
-        CHECK_SYS(  sctp_setsockopt_events_linux_workaround(sk, &event) );
+        CHECK_SYS(  sctp_setsockopt_event_subscribe_workaround(sk, &event) );
 #endif
 		
 		if (TRACE_BOOL(ANNOYING)) {
