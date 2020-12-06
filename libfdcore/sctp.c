@@ -537,7 +537,7 @@ static int fd_setsockopt_prebind(int sk)
 #endif /* ADJUST_RTX_PARAMS */
 
 		/* Set the option to the socket */
-#if 0 /* Open5GS : workaround for SCTP event */
+#if 0 /* Open5GS : workaround for SCTP  */
 		CHECK_SYS(  setsockopt(sk, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS, &parms, sizeof(parms)) );
 #else
         CHECK_SYS(  sctp_setsockopt_paddrparams_workaround(sk, &parms) );
@@ -580,7 +580,7 @@ static int fd_setsockopt_prebind(int sk)
 		// event.sctp_authentication_event = 0;	/* when new key is made active */
 
 		/* Set the option to the socket */
-#if 0 /* Open5GS : workaround for SCTP event */
+#if 0 /* Open5GS : workaround for SCTP */
 		CHECK_SYS(  setsockopt(sk, IPPROTO_SCTP, SCTP_EVENTS, &event, sizeof(event)) );
 #else
         CHECK_SYS(  sctp_setsockopt_event_subscribe_workaround(sk, &event) );
