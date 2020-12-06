@@ -60,7 +60,7 @@
 #define ADJUST_RTX_PARAMS
 #endif /* USE_DEFAULT_SCTP_RTX_PARAMS */
 
-#if 1 /* Open5GS : workaround for SCTP event */
+#if 1 /* Open5GS : workaround for SCTP */
 /* is any of the bytes from offset .. u8_size in 'u8' non-zero? return offset
  * or -1 if all zero */
 static int byte_nonzero(
@@ -507,13 +507,24 @@ static int fd_setsockopt_prebind(int sk)
 		
 		/* Some kernel versions need this to be set */
 		parms.spp_address.ss_family = AF_INET;
+
+#if 1 /* Open5GS : workaround for SCTP  */
+		if (determine_sctp_sockopt_paddrparams_size() < 0) {
+			LOG_E("Cannot determine SCTP_EVENTS socket option size");
+			return -1;
+		}
+#endif
 		
 		if (TRACE_BOOL(ANNOYING)) {
 			sz = sizeof(parms);
 
 			/* Read socket defaults */
 			CHECK_SYS(  getsockopt(sk, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS, &parms, &sz)  );
+#if 0 /* Open5GS : workaround for SCTP */
 			if (sz != sizeof(parms))
+#else
+			if (sz != sizeof(parms) && sz != sctp_sockopt_paddrparams_size)
+#endif
 			{
 				TRACE_DEBUG(INFO, "Invalid size of socket option: %d / %d", sz, (socklen_t)sizeof(parms));
 				return ENOTSUP;
@@ -589,7 +600,7 @@ static int fd_setsockopt_prebind(int sk)
 		if (TRACE_BOOL(ANNOYING)) {
 			sz = sizeof(event);
 			CHECK_SYS(  getsockopt(sk, IPPROTO_SCTP, SCTP_EVENTS, &event, &sz) );
-#if 0 /* Open5GS : workaround for SCTP event */
+#if 0 /* Open5GS : workaround for SCTP */
 			if (sz != sizeof(event))
 #else
 			if (sz != sizeof(event) && sz != sctp_sockopt_event_subscribe_size)
